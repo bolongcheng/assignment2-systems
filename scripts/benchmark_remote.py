@@ -6,6 +6,7 @@ app = modal.App("cs336-benchmark")
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("uv")
+    .add_local_dir("cs336-basics", remote_path="/root/cs336-basics")
     .pip_install_from_pyproject("pyproject.toml")
     .add_local_python_source("cs336_basics")
     .add_local_dir("scripts", remote_path="/root/scripts")
