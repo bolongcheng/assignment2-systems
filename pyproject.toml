@@ -19,6 +19,9 @@ dependencies = [
     "ruff>=0.15.10",
 ]
 
+[dependency-groups]
+notebook = ["jupyter", "matplotlib"]
+modal = ["modal>=0.66"]
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12"]
 build-backend = "uv_build"
@@ -33,7 +36,6 @@ python-preference = "managed"
 
 [tool.uv.sources]
 cs336-basics = { path = "./cs336-basics", editable = true } # Change this path to your assignment1-basics repo you want to use your own implementation!
-
 
 
 [tool.pytest.ini_options]
@@ -56,3 +58,17 @@ line-length = 180
 [tool.ruff.lint]
 extend-select = ["UP"]
 ignore = ["F722"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["cs336_basics, cs336_systems"]
+known-third-party = ["wandb"]
+lines-after-imports = 2
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+    "tests",
+]
