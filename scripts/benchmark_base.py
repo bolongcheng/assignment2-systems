@@ -1,6 +1,6 @@
+import argparse
 import timeit
 
-import numpy as np
 import pandas as pd
 import torch
 
@@ -9,7 +9,7 @@ from cs336_basics.nn_utils import cross_entropy
 from cs336_basics.optimizer import AdamW
 from scripts.constants import MODEL_SIZES, BATCH_SIZE, ModelParams, VOCAB_SIZE, CONTEXT_LENGTH
 
-AMORTIZED_NUM = 100
+AMORTIZED_NUM = 1
 WARMUP_ITERS = 5
 EVAL_ITERS = 10
 
@@ -72,16 +72,16 @@ def benchmark(
 ) -> list[float]:
     model_params = MODEL_SIZES[model_str]
     gpt = init_model(model_params)
-    gpt.to("cuda")
-    optimizer = AdamW(gpt.parameters())
+    gpt.to(device="cuda", dtype=torch.bfloat16)
     x, y = get_random_data_batch()
     x, y = x.to("cuda"), y.to("cuda")
 
-    if option == "forward":
+    if option == "fwd":
         stmt = lambda: forward_step(gpt, x)
-    elif option == "forward_backward":
+    elif option == "bwd":
         stmt = lambda: forward_backward_step(gpt, x, y)
-    elif option == "forward_backward_optimize":
+    elif option == "opt":
+        optimizer = AdamW(gpt.parameters())
         stmt = lambda: forward_backward_optimize_step(gpt, optimizer, x, y)
     else:
         raise ValueError(f"Unknown option: {option}")
@@ -93,15 +93,27 @@ def benchmark(
     return times
 
 
-def simple_profile() -> None:
+def run_benchmark(option: str) -> None:
+    assert option in ["fwd", "bwd", "opt"]
     results = {}
 
     for model_str in MODEL_SIZES:
-        for option in ["forward", "forward_backward", "forward_backward_optimize"]:
-            print(f"Benchmarking {model_str} - {option}")
-            times = benchmark(option, model_str, WARMUP_ITERS, EVAL_ITERS)
-            results[f"{model_str}/{option}"] = times
+        print(f"Benchmarking {model_str} - {option}")
+        times = benchmark(option, model_str, WARMUP_ITERS, EVAL_ITERS)
+        results[f"{model_str}/{option}"] = times
+        torch.cuda.empty_cache()
 
     df = pd.DataFrame.from_dict(results, orient="columns")
     df.index.names = ["iteration"]
-    df.to_csv("benchmarks/pytorch_simple_profile.csv")
+    df.to_csv(f"benchmarks/pytorch_simple_profile_{option}.csv")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--option", choices=["fwd", "bwd", "opt"], type=str, required=True)
+    args = parser.parse_args()
+    run_benchmark(args.option)
+
+
+if __name__ == "__main__":
+    main()

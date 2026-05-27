@@ -5,9 +5,10 @@ app = modal.App("cs336-benchmark")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
+    .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
     .pip_install("uv")
-    .add_local_dir("cs336-basics", remote_path="/root/cs336-basics")
-    .pip_install_from_pyproject("pyproject.toml")
+    .add_local_dir("cs336-basics", remote_path="/.uv/cs336-basics", copy=True)
+    .uv_sync()
     .add_local_python_source("cs336_basics")
     .add_local_dir("scripts", remote_path="/root/scripts")
 )
@@ -25,9 +26,9 @@ def benchmark_remote() -> None:
     import sys
 
     sys.path.append("/root")
-    from scripts.benchmark_base import simple_profile
+    from scripts.benchmark_base import run_benchmark
 
-    simple_profile()
+    run_benchmark("opt")
 
 
 @app.local_entrypoint()
