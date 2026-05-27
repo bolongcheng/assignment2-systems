@@ -28,7 +28,7 @@ def benchmark_remote() -> None:
     sys.path.append("/root")
     from scripts.benchmark_base import run_benchmark
 
-    run_benchmark("opt")
+    run_benchmark(option="bwd")
 
 
 @app.local_entrypoint()

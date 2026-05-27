@@ -1,5 +1,6 @@
 import argparse
 import timeit
+from enum import StrEnum
 
 import pandas as pd
 import torch
@@ -10,8 +11,14 @@ from cs336_basics.optimizer import AdamW
 from scripts.constants import MODEL_SIZES, BATCH_SIZE, ModelParams, VOCAB_SIZE, CONTEXT_LENGTH
 
 AMORTIZED_NUM = 1
-WARMUP_ITERS = 5
+WARMUP_ITERS = 0
 EVAL_ITERS = 10
+
+
+class BenchmarkOption(StrEnum):
+    FWD = "fwd"
+    BWD = "bwd"
+    OPT = "opt"
 
 
 def init_model(model_params: ModelParams) -> BasicsTransformerLM:
@@ -72,15 +79,15 @@ def benchmark(
 ) -> list[float]:
     model_params = MODEL_SIZES[model_str]
     gpt = init_model(model_params)
-    gpt.to(device="cuda", dtype=torch.bfloat16)
+    gpt.to(device="cuda")
     x, y = get_random_data_batch()
     x, y = x.to("cuda"), y.to("cuda")
 
-    if option == "fwd":
+    if option == BenchmarkOption.FWD:
         stmt = lambda: forward_step(gpt, x)
-    elif option == "bwd":
+    elif option == BenchmarkOption.BWD:
         stmt = lambda: forward_backward_step(gpt, x, y)
-    elif option == "opt":
+    elif option == BenchmarkOption.OPT:
         optimizer = AdamW(gpt.parameters())
         stmt = lambda: forward_backward_optimize_step(gpt, optimizer, x, y)
     else:
@@ -93,11 +100,17 @@ def benchmark(
     return times
 
 
-def run_benchmark(option: str) -> None:
-    assert option in ["fwd", "bwd", "opt"]
+def run_benchmark(model_str: str | None, option: str) -> None:
     results = {}
 
-    for model_str in MODEL_SIZES:
+    if model_str is None:
+        model_strs = MODEL_SIZES.keys()
+        file_suffix = "all"
+    else:
+        model_strs = [model_str]
+        file_suffix = model_str
+
+    for model_str in model_strs:
         print(f"Benchmarking {model_str} - {option}")
         times = benchmark(option, model_str, WARMUP_ITERS, EVAL_ITERS)
         results[f"{model_str}/{option}"] = times
@@ -105,14 +118,15 @@ def run_benchmark(option: str) -> None:
 
     df = pd.DataFrame.from_dict(results, orient="columns")
     df.index.names = ["iteration"]
-    df.to_csv(f"benchmarks/pytorch_simple_profile_{option}.csv")
+    df.to_csv(f"benchmarks/pytorch_simple_profile_{option}_warmup{WARMUP_ITERS}_{file_suffix}.csv")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--option", choices=["fwd", "bwd", "opt"], type=str, required=True)
+    parser.add_argument("--model", choices=list(MODEL_SIZES.keys()), type=str, default="small")
+    parser.add_argument("--option", choices=list(BenchmarkOption), type=str, required=True)
     args = parser.parse_args()
-    run_benchmark(args.option)
+    run_benchmark(args.model, args.option)
 
 
 if __name__ == "__main__":
