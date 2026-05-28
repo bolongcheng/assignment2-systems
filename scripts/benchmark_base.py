@@ -43,7 +43,8 @@ def forward_step(
     model: BasicsTransformerLM,
     x: torch.Tensor,
 ):
-    model.forward(x)
+    with nvtx.range("forward pass"):
+        model.forward(x)
     torch.cuda.synchronize()
 
 
@@ -52,9 +53,14 @@ def forward_backward_step(
     x: torch.Tensor,
     y: torch.Tensor,
 ):
-    pred = model.forward(x)
-    loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
-    loss.backward()
+    with nvtx.range("forward pass"):
+        pred = model.forward(x)
+
+    with nvtx.range("loss"):
+        loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
+
+    with nvtx.range("backward pass"):
+        loss.backward()
     torch.cuda.synchronize()
 
 
@@ -64,11 +70,19 @@ def forward_backward_optimize_step(
     x: torch.Tensor,
     y: torch.Tensor,
 ):
-    pred = model.forward(x)
-    loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
+    with nvtx.range("forward pass"):
+        pred = model.forward(x)
+
+    with nvtx.range("loss"):
+        loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
+
     optimizer.zero_grad(set_to_none=True)
-    loss.backward()
-    optimizer.step()
+
+    with nvtx.range("backward pass"):
+        loss.backward()
+
+    with nvtx.range("optimizer step"):
+        optimizer.step()
     torch.cuda.synchronize()
 
 
