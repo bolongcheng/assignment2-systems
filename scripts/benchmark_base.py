@@ -4,6 +4,7 @@ from enum import StrEnum
 
 import pandas as pd
 import torch
+import torch.cuda.nvtx as nvtx
 
 from cs336_basics.model import BasicsTransformerLM
 from cs336_basics.nn_utils import cross_entropy
@@ -93,10 +94,12 @@ def benchmark(
     else:
         raise ValueError(f"Unknown option: {option}")
 
-    for _ in range(warmup_iters):
-        stmt()
+    with nvtx.range(f"{model_str} Warmup {option}"):
+        for _ in range(warmup_iters):
+            stmt()
 
-    times = timeit.repeat(stmt, repeat=eval_iters, number=AMORTIZED_NUM)
+    with nvtx.range(f"{model_str} Benchmark {option}"):
+        times = timeit.repeat(stmt, repeat=eval_iters, number=AMORTIZED_NUM)
     return times
 
 
