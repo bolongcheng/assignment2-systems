@@ -94,11 +94,11 @@ def benchmark(
     else:
         raise ValueError(f"Unknown option: {option}")
 
-    with nvtx.range(f"{model_str} Warmup {option}"):
+    with nvtx.range("warmup"):
         for _ in range(warmup_iters):
             stmt()
 
-    with nvtx.range(f"{model_str} Benchmark {option}"):
+    with nvtx.range("benchmark"):
         times = timeit.repeat(stmt, repeat=eval_iters, number=AMORTIZED_NUM)
     return times
 
