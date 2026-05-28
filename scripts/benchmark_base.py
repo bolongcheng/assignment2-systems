@@ -12,7 +12,7 @@ from cs336_basics.optimizer import AdamW
 from scripts.constants import MODEL_SIZES, BATCH_SIZE, ModelParams, VOCAB_SIZE, CONTEXT_LENGTH
 
 AMORTIZED_NUM = 1
-WARMUP_ITERS = 0
+WARMUP_ITERS = 5
 EVAL_ITERS = 10
 
 
