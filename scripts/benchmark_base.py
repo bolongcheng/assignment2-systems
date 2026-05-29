@@ -216,7 +216,7 @@ def main():
     if args.mode == "benchmark":
         run_benchmark(args.option, args.model)
     elif args.mode == "profile":
-        profile(args.option, args.model)
+        profile(args.option, args.model, context_length=args.context_length)
     elif args.mode == "toy":
         benchmark_toy_precision(dtype=dtype_map[args.dtype])
 
