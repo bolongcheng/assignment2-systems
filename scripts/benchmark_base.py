@@ -187,6 +187,8 @@ def benchmark_toy_precision(
     print("before autocast")
     _print_model_dtype(model)
     with torch.autocast(device_type="cuda", dtype=dtype):
+        model.to(device="cuda")
+        x, y = x.to("cuda"), y.to("cuda")
         pred = model(x)
         print("after forward pass")
         _print_model_dtype(model)

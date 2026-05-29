@@ -10,7 +10,13 @@ class ToyModel(nn.Module):
         self.relu = nn.ReLU()
 
     def forward(self, x):
-        x = self.relu(self.fc1(x))
+        print("dtype before fc1: ", x.dtype)
+        x = self.fc1(x)
+        print("dtype after fc1: ", x.dtype)
+        x = self.relu(x)
+        print("dtype after relu: ", x.dtype)
         x = self.ln(x)
+        print("dtype after ln: ", x.dtype)
         x = self.fc2(x)
+        print("dtype after fc2: ", x.dtype)
         return x
