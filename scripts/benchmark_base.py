@@ -129,7 +129,7 @@ def benchmark(
 def profile(
     option: str,
     model_str: str,
-    warmup_iters: int,
+    warmup_iters: int = WARMUP_ITERS,
     context_length: int = CONTEXT_LENGTH,
 ) -> None:
     stmt = create_stmt(model_str, option, context_length)
@@ -201,9 +201,11 @@ def benchmark_toy_precision(
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", default="benchmark", choices=["benchmark", "profile", "toy"])
     parser.add_argument("--model", choices=list(MODEL_SIZES.keys()), type=str, default="small")
     parser.add_argument("--option", choices=list(BenchmarkOption), type=str, required=True)
     parser.add_argument("--dtype", default="fp16", choices=["fp16", "bf16"])
+    parser.add_argument("--context_length", default=CONTEXT_LENGTH, type=int)
     args = parser.parse_args()
 
     dtype_map = {
@@ -211,8 +213,12 @@ def main():
         "bf16": torch.bfloat16,
     }
 
-    benchmark_toy_precision(dtype=dtype_map[args.dtype])
-    # run_benchmark(args.model, args.option)
+    if args.mode == "benchmark":
+        run_benchmark(args.option, args.model)
+    elif args.mode == "profile":
+        profile(args.option, args.model)
+    elif args.mode == "toy":
+        benchmark_toy_precision(dtype=dtype_map[args.dtype])
 
 
 if __name__ == "__main__":
