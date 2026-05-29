@@ -1,5 +1,6 @@
 import argparse
 import timeit
+from collections.abc import Callable
 from enum import StrEnum
 
 import pandas as pd
@@ -23,10 +24,10 @@ class BenchmarkOption(StrEnum):
     OPT = "opt"
 
 
-def init_model(model_params: ModelParams) -> BasicsTransformerLM:
+def init_model(model_params: ModelParams, context_length: int) -> BasicsTransformerLM:
     return BasicsTransformerLM(
         vocab_size=VOCAB_SIZE,
-        context_length=CONTEXT_LENGTH,
+        context_length=context_length,
         d_model=model_params.d_model,
         d_ff=model_params.d_ff,
         num_layers=model_params.num_layers,
@@ -34,8 +35,8 @@ def init_model(model_params: ModelParams) -> BasicsTransformerLM:
     )
 
 
-def get_random_data_batch() -> tuple[torch.Tensor, torch.Tensor]:
-    data = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE, CONTEXT_LENGTH + 1))
+def get_random_data_batch(context_length: int = CONTEXT_LENGTH) -> tuple[torch.Tensor, torch.Tensor]:
+    data = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE, context_length + 1))
     return data[:, :-1].contiguous(), data[:, 1:].contiguous()
 
 
@@ -43,30 +44,26 @@ def get_random_data_batch() -> tuple[torch.Tensor, torch.Tensor]:
 def forward_step(
     model: torch.nn.Module,
     x: torch.Tensor,
-    dtype: torch.dtype = torch.float32,
 ):
-    with torch.autocast(device_type="cuda", dtype=dtype):
-        with nvtx.range("forward pass"):
-            model.forward(x)
-        torch.cuda.synchronize()
+    with nvtx.range("forward pass"):
+        model.forward(x)
+    torch.cuda.synchronize()
 
 
 def forward_backward_step(
     model: torch.nn.Module,
     x: torch.Tensor,
     y: torch.Tensor,
-    dtype: torch.dtype = torch.float32,
 ):
-    with torch.autocast(device_type="cuda", dtype=dtype):
-        with nvtx.range("forward pass"):
-            pred = model.forward(x)
+    with nvtx.range("forward pass"):
+        pred = model.forward(x)
 
-        with nvtx.range("loss"):
-            loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
+    with nvtx.range("loss"):
+        loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
 
-        with nvtx.range("backward pass"):
-            loss.backward()
-        torch.cuda.synchronize()
+    with nvtx.range("backward pass"):
+        loss.backward()
+    torch.cuda.synchronize()
 
 
 def forward_backward_optimize_step(
@@ -74,23 +71,44 @@ def forward_backward_optimize_step(
     optimizer: torch.optim.Optimizer,
     x: torch.Tensor,
     y: torch.Tensor,
-    dtype: torch.dtype = torch.float32,
 ):
-    with torch.autocast(device_type="cuda", dtype=dtype):
-        with nvtx.range("forward pass"):
-            pred = model.forward(x)
+    with nvtx.range("forward pass"):
+        pred = model.forward(x)
 
-        with nvtx.range("loss"):
-            loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
+    with nvtx.range("loss"):
+        loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
 
-        optimizer.zero_grad(set_to_none=True)
+    optimizer.zero_grad(set_to_none=True)
 
-        with nvtx.range("backward pass"):
-            loss.backward()
+    with nvtx.range("backward pass"):
+        loss.backward()
 
-        with nvtx.range("optimizer step"):
-            optimizer.step()
-        torch.cuda.synchronize()
+    with nvtx.range("optimizer step"):
+        optimizer.step()
+    torch.cuda.synchronize()
+
+
+def create_stmt(
+    model_str: str,
+    option: str,
+    context_length: int = CONTEXT_LENGTH,
+) -> Callable[[], None]:
+    model_params = MODEL_SIZES[model_str]
+    model = init_model(model_params, context_length=context_length)
+    model.to(device="cuda")
+    x, y = get_random_data_batch(context_length)
+    x, y = x.to("cuda"), y.to("cuda")
+
+    if option == BenchmarkOption.FWD:
+        stmt = lambda: forward_step(model, x)
+    elif option == BenchmarkOption.BWD:
+        stmt = lambda: forward_backward_step(model, x, y)
+    elif option == BenchmarkOption.OPT:
+        optimizer = AdamW(model.parameters())
+        stmt = lambda: forward_backward_optimize_step(model, optimizer, x, y)
+    else:
+        raise ValueError(f"Unknown option: {option}")
+    return stmt
 
 
 def benchmark(
@@ -98,65 +116,42 @@ def benchmark(
     model_str: str,
     warmup_iters: int,
     eval_iters: int,
+    context_length: int = CONTEXT_LENGTH,
 ) -> list[float]:
-    model_params = MODEL_SIZES[model_str]
-    gpt = init_model(model_params)
-    gpt.to(device="cuda")
-    x, y = get_random_data_batch()
-    x, y = x.to("cuda"), y.to("cuda")
+    stmt = create_stmt(model_str, option, context_length)
 
-    if option == BenchmarkOption.FWD:
-        stmt = lambda: forward_step(gpt, x)
-    elif option == BenchmarkOption.BWD:
-        stmt = lambda: forward_backward_step(gpt, x, y)
-    elif option == BenchmarkOption.OPT:
-        optimizer = AdamW(gpt.parameters())
-        stmt = lambda: forward_backward_optimize_step(gpt, optimizer, x, y)
-    else:
-        raise ValueError(f"Unknown option: {option}")
-
-    with nvtx.range("warmup"):
-        for _ in range(warmup_iters):
-            stmt()
-
-    with nvtx.range("benchmark"):
-        times = timeit.repeat(stmt, repeat=eval_iters, number=AMORTIZED_NUM)
+    for _ in range(warmup_iters):
+        stmt()
+    times = timeit.repeat(stmt, repeat=eval_iters, number=AMORTIZED_NUM)
     return times
 
 
-def benchmark_toy_precision(
+def profile(
     option: str,
+    model_str: str,
     warmup_iters: int,
-    eval_iters: int,
-    dtype: torch.dtype = torch.float32,
-) -> list[float]:
-    model = ToyModel(in_features=VOCAB_SIZE, out_features=VOCAB_SIZE)
-    model.to(device="cuda")
-    x, y = get_random_data_batch()
-    x, y = x.to("cuda"), y.to("cuda")
-
-    if option == BenchmarkOption.FWD:
-        stmt = lambda: forward_step(model, x, dtype)
-    elif option == BenchmarkOption.BWD:
-        stmt = lambda: forward_backward_step(model, x, y, dtype)
-    elif option == BenchmarkOption.OPT:
-        optimizer = AdamW(model.parameters())
-        stmt = lambda: forward_backward_optimize_step(model, optimizer, x, y, dtype)
-    else:
-        raise ValueError(f"Unknown option: {option}")
-
-    with torch.autocast(device_type="cuda", dtype=dtype):
-        for m in model.modules():
-            if hasattr(m, "weight"):
-                print(f"Module: {m}, Weight dtype: {m.weight.dtype}")
+    context_length: int = CONTEXT_LENGTH,
+) -> None:
+    stmt = create_stmt(model_str, option, context_length)
 
     with nvtx.range("warmup"):
         for _ in range(warmup_iters):
             stmt()
 
-    with nvtx.range("benchmark"):
-        times = timeit.repeat(stmt, repeat=eval_iters, number=AMORTIZED_NUM)
-    return times
+    with nvtx.range("profile"):
+        stmt()
+
+
+def _print_model_dtype(model: torch.nn.Module) -> None:
+    for m in model.modules():
+        if hasattr(m, "weight"):
+            print(f"Module: {m}, Weight dtype: {m.weight.dtype}")
+            if m.weight.grad is not None:
+                print(f"Module: {m}, Grad dtype: {m.weight.grad.dtype}")
+        if hasattr(m, "bias") and m.bias is not None:
+            print(f"Module: {m}, Bias dtype: {m.bias.dtype}")
+            if m.bias.grad is not None:
+                print(f"Module: {m}, Grad dtype: {m.bias.grad.dtype}")
 
 
 def run_benchmark(model_str: str | None, option: str) -> None:
@@ -180,17 +175,23 @@ def run_benchmark(model_str: str | None, option: str) -> None:
     df.to_csv(f"benchmarks/pytorch_simple_profile_{option}_warmup{WARMUP_ITERS}_{file_suffix}.csv")
 
 
-def run_benchmark_toy(option: str, dtype: torch.dtype) -> None:
-    results = {}
+def benchmark_toy_precision(
+    batch_size: int = 64,
+    model_out_dim: int = 36,
+    dtype: torch.dtype = torch.float32,
+) -> None:
+    model = ToyModel(in_features=CONTEXT_LENGTH, out_features=model_out_dim)
+    model.to(device="cuda")
+    x = torch.rand((batch_size, CONTEXT_LENGTH))
+    y = torch.randint(0, model_out_dim, (batch_size, 1))
+    x, y = x.to("cuda"), y.to("cuda")
 
-    print(f"Benchmarking toy model - {option}")
-    times = benchmark_toy_precision(option, WARMUP_ITERS, EVAL_ITERS, dtype)
-    results[f"toy/{option}"] = times
-    torch.cuda.empty_cache()
-
-    df = pd.DataFrame.from_dict(results, orient="columns")
-    df.index.names = ["iteration"]
-    df.to_csv(f"benchmarks/toy_profile_{option}_warmup{WARMUP_ITERS}.csv")
+    with torch.autocast(device_type="cuda", dtype=dtype):
+        pred = model(x)
+        loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
+        loss.backward()
+        print(loss.dtype)
+        _print_model_dtype(model)
 
 
 def main():
@@ -205,8 +206,8 @@ def main():
         "bf16": torch.bfloat16,
     }
 
-    run_benchmark_toy(args.option, dtype_map[args.dtype])
-    # run_benchmark(args.model, args.option, dtype_map[args.dtype])
+    benchmark_toy_precision(dtype=dtype_map[args.dtype])
+    # run_benchmark(args.model, args.option)
 
 
 if __name__ == "__main__":
