@@ -1,6 +1,7 @@
 import argparse
 import timeit
 from collections.abc import Callable
+from contextlib import nullcontext
 from enum import StrEnum
 
 import pandas as pd
@@ -116,13 +117,16 @@ def benchmark(
     model_str: str,
     warmup_iters: int,
     eval_iters: int,
-    context_length: int = CONTEXT_LENGTH,
+    dtype: torch.dtype = torch.float32,
 ) -> list[float]:
-    stmt = create_stmt(model_str, option, context_length)
+    cm = torch.autocast(device_type="cuda", dtype=dtype) if dtype != torch.float32 else nullcontext()
 
-    for _ in range(warmup_iters):
-        stmt()
-    times = timeit.repeat(stmt, repeat=eval_iters, number=AMORTIZED_NUM)
+    with cm:
+        stmt = create_stmt(model_str, option, CONTEXT_LENGTH)
+
+        for _ in range(warmup_iters):
+            stmt()
+        times = timeit.repeat(stmt, repeat=eval_iters, number=AMORTIZED_NUM)
     return times
 
 
@@ -154,7 +158,11 @@ def _print_model_dtype(model: torch.nn.Module) -> None:
                 print(f"Module: {m}, Grad dtype: {m.bias.grad.dtype}")
 
 
-def run_benchmark(option: str, model_str: str | None = None) -> None:
+def run_benchmark(
+    option: str,
+    model_str: str | None = None,
+    dtype: torch.dtype = torch.float32,
+) -> None:
     results = {}
 
     if model_str is None:
@@ -166,7 +174,7 @@ def run_benchmark(option: str, model_str: str | None = None) -> None:
 
     for model_str in model_strs:
         print(f"Benchmarking {model_str} - {option}")
-        times = benchmark(option, model_str, WARMUP_ITERS, EVAL_ITERS)
+        times = benchmark(option, model_str, WARMUP_ITERS, EVAL_ITERS, dtype=dtype)
         results[f"{model_str}/{option}"] = times
         torch.cuda.empty_cache()
 
@@ -186,7 +194,8 @@ def benchmark_toy_precision(
 
     print("before autocast")
     _print_model_dtype(model)
-    with torch.autocast(device_type="cuda", dtype=dtype):
+    cm = torch.autocast(device_type="cuda", dtype=dtype) if dtype != torch.float32 else nullcontext()
+    with cm:
         model.to(device="cuda")
         x, y = x.to("cuda"), y.to("cuda")
         pred = model(x)
@@ -202,19 +211,20 @@ def benchmark_toy_precision(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", default="benchmark", choices=["benchmark", "profile", "toy"])
-    parser.add_argument("--model", choices=list(MODEL_SIZES.keys()), type=str, default="small")
+    parser.add_argument("--model", choices=list(MODEL_SIZES.keys()), type=str, default=None)
     parser.add_argument("--option", choices=list(BenchmarkOption), type=str, required=True)
-    parser.add_argument("--dtype", default="fp16", choices=["fp16", "bf16"])
+    parser.add_argument("--dtype", default="fp32", choices=["fp16", "bf16", "fp32"])
     parser.add_argument("--context_length", default=CONTEXT_LENGTH, type=int)
     args = parser.parse_args()
 
     dtype_map = {
         "fp16": torch.float16,
         "bf16": torch.bfloat16,
+        "fp32": torch.float32,
     }
 
     if args.mode == "benchmark":
-        run_benchmark(args.option, args.model)
+        run_benchmark(args.option, args.model, dtype=dtype_map[args.dtype])
     elif args.mode == "profile":
         profile(args.option, args.model, context_length=args.context_length)
     elif args.mode == "toy":
