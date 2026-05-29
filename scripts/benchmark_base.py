@@ -181,10 +181,8 @@ def benchmark_toy_precision(
     dtype: torch.dtype = torch.float32,
 ) -> None:
     model = ToyModel(in_features=CONTEXT_LENGTH, out_features=model_out_dim)
-    model.to(device="cuda")
     x = torch.rand((batch_size, CONTEXT_LENGTH))
     y = torch.randint(0, model_out_dim, (batch_size, 1))
-    x, y = x.to("cuda"), y.to("cuda")
 
     print("before autocast")
     _print_model_dtype(model)
