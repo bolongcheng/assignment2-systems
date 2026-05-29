@@ -186,12 +186,17 @@ def benchmark_toy_precision(
     y = torch.randint(0, model_out_dim, (batch_size, 1))
     x, y = x.to("cuda"), y.to("cuda")
 
+    print("before autocast")
+    _print_model_dtype(model)
     with torch.autocast(device_type="cuda", dtype=dtype):
         pred = model(x)
+        print("after forward pass")
+        _print_model_dtype(model)
         loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
         loss.backward()
-        print(loss.dtype)
+        print("after backward pass")
         _print_model_dtype(model)
+        print(loss.dtype)
 
 
 def main():
