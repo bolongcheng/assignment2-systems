@@ -146,7 +146,7 @@ def profile(
         torch.cuda.memory._record_memory_history(max_entries=1000000)
         with nvtx.range("profile"):
             stmt()
-        torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
+        torch.cuda.memory._dump_snapshot(f"benchmarks/memory_snapshot_{model_str}_{option}_cl{context_length}_dtype{dtype}.pickle")
         torch.cuda.memory._record_memory_history(enabled=None)
 
 

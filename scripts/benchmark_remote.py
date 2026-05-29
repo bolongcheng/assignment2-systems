@@ -26,9 +26,9 @@ def benchmark_remote() -> None:
     import sys
 
     sys.path.append("/root")
-    from scripts.benchmark_base import run_benchmark
+    from scripts.benchmark_base import profile
 
-    run_benchmark(option="bwd")
+    profile(option="fwd", model_str="xl")
 
 
 @app.local_entrypoint()
