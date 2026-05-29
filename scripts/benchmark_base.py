@@ -154,7 +154,7 @@ def _print_model_dtype(model: torch.nn.Module) -> None:
                 print(f"Module: {m}, Grad dtype: {m.bias.grad.dtype}")
 
 
-def run_benchmark(model_str: str | None, option: str) -> None:
+def run_benchmark(option: str, model_str: str | None = None) -> None:
     results = {}
 
     if model_str is None:
