@@ -135,15 +135,19 @@ def profile(
     model_str: str,
     warmup_iters: int = WARMUP_ITERS,
     context_length: int = CONTEXT_LENGTH,
+    dtype: torch.dtype = torch.float32,
 ) -> None:
-    stmt = create_stmt(model_str, option, context_length)
+    cm = torch.autocast(device_type="cuda", dtype=dtype) if dtype != torch.float32 else nullcontext()
+    with cm:
+        stmt = create_stmt(model_str, option, context_length)
 
-    with nvtx.range("warmup"):
         for _ in range(warmup_iters):
             stmt()
-
-    with nvtx.range("profile"):
-        stmt()
+        torch.cuda.memory._record_memory_history(max_entries=1000000)
+        with nvtx.range("profile"):
+            stmt()
+        torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
+        torch.cuda.memory._record_memory_history(enabled=None)
 
 
 def _print_model_dtype(model: torch.nn.Module) -> None:
