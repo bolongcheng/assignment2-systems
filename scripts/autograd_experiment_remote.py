@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from cs336_basics.model import TransformerBlock, RotaryEmbedding
 
@@ -60,9 +61,23 @@ def experiment_remote() -> None:
         x = block(x)
         return x
 
+    def two_blocks(x):
+        x = block(x)
+        x = block(x)
+        return x
+
+    def four_blocks_checkpoint(x):
+        # checkpoint throws out all the saved tensors until the backward pass
+        # when getting to the checkpointed block in the backward pass,
+        # it reruns a forward pass to produce the saved tensors,
+        # then completes normal backward pass.
+        x = checkpoint(two_blocks, x, use_reentrant=False)
+        x = checkpoint(two_blocks, x, use_reentrant=False)
+        return x
+
     x = torch.randn((4, context_length, d_model), requires_grad=True)
     with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook):
-        y = four_blocks(x)
+        y = four_blocks_checkpoint(x)
 
     print(f"Total size of saved tensors in single TransformerBlock: {total_size_bytes / (1024**2):.2f} MiB")
 
