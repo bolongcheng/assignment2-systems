@@ -45,9 +45,12 @@ def get_random_data_batch(context_length: int = CONTEXT_LENGTH) -> tuple[torch.T
 def forward_step(
     model: torch.nn.Module,
     x: torch.Tensor,
+    dtype: torch.dtype = torch.float32,
 ):
-    with nvtx.range("forward pass"):
-        model.forward(x)
+    cm = torch.autocast(device_type="cuda", dtype=dtype) if dtype != torch.float32 else nullcontext()
+    with cm:
+        with nvtx.range("forward pass"):
+            model.forward(x)
     torch.cuda.synchronize()
 
 
@@ -55,12 +58,15 @@ def forward_backward_step(
     model: torch.nn.Module,
     x: torch.Tensor,
     y: torch.Tensor,
+    dtype: torch.dtype = torch.float32,
 ):
-    with nvtx.range("forward pass"):
-        pred = model.forward(x)
+    cm = torch.autocast(device_type="cuda", dtype=dtype) if dtype != torch.float32 else nullcontext()
+    with cm:
+        with nvtx.range("forward pass"):
+            pred = model.forward(x)
 
-    with nvtx.range("loss"):
-        loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
+        with nvtx.range("loss"):
+            loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
 
     with nvtx.range("backward pass"):
         loss.backward()
@@ -72,12 +78,15 @@ def forward_backward_optimize_step(
     optimizer: torch.optim.Optimizer,
     x: torch.Tensor,
     y: torch.Tensor,
+    dtype: torch.dtype = torch.float32,
 ):
-    with nvtx.range("forward pass"):
-        pred = model.forward(x)
+    cm = torch.autocast(device_type="cuda", dtype=dtype) if dtype != torch.float32 else nullcontext()
+    with cm:
+        with nvtx.range("forward pass"):
+            pred = model.forward(x)
 
-    with nvtx.range("loss"):
-        loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
+        with nvtx.range("loss"):
+            loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
 
     optimizer.zero_grad(set_to_none=True)
 
@@ -93,20 +102,21 @@ def create_stmt(
     model_str: str,
     option: str,
     context_length: int = CONTEXT_LENGTH,
+    dtype: torch.dtype = torch.float32,
 ) -> Callable[[], None]:
     model_params = MODEL_SIZES[model_str]
     model = init_model(model_params, context_length=context_length)
-    model.to(device="cuda")
+    # model.to(device="cuda")
     x, y = get_random_data_batch(context_length)
-    x, y = x.to("cuda"), y.to("cuda")
+    # x, y = x.to("cuda"), y.to("cuda")
 
     if option == BenchmarkOption.FWD:
-        stmt = lambda: forward_step(model, x)
+        stmt = lambda: forward_step(model, x, dtype)
     elif option == BenchmarkOption.BWD:
-        stmt = lambda: forward_backward_step(model, x, y)
+        stmt = lambda: forward_backward_step(model, x, y, dtype)
     elif option == BenchmarkOption.OPT:
         optimizer = AdamW(model.parameters())
-        stmt = lambda: forward_backward_optimize_step(model, optimizer, x, y)
+        stmt = lambda: forward_backward_optimize_step(model, optimizer, x, y, dtype)
     else:
         raise ValueError(f"Unknown option: {option}")
     return stmt
@@ -119,14 +129,12 @@ def benchmark(
     eval_iters: int,
     dtype: torch.dtype = torch.float32,
 ) -> list[float]:
-    cm = torch.autocast(device_type="cuda", dtype=dtype) if dtype != torch.float32 else nullcontext()
 
-    with cm:
-        stmt = create_stmt(model_str, option, CONTEXT_LENGTH)
+    stmt = create_stmt(model_str, option, CONTEXT_LENGTH, dtype)
 
-        for _ in range(warmup_iters):
-            stmt()
-        times = timeit.repeat(stmt, repeat=eval_iters, number=AMORTIZED_NUM)
+    for _ in range(warmup_iters):
+        stmt()
+    times = timeit.repeat(stmt, repeat=eval_iters, number=AMORTIZED_NUM)
     return times
 
 
@@ -206,10 +214,10 @@ def benchmark_toy_precision(
         print("after forward pass")
         _print_model_dtype(model)
         loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
-        loss.backward()
-        print("after backward pass")
-        _print_model_dtype(model)
-        print(loss.dtype)
+    loss.backward()
+    print("after backward pass")
+    _print_model_dtype(model)
+    print(loss.dtype)
 
 
 def main():
