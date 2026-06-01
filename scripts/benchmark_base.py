@@ -106,9 +106,9 @@ def create_stmt(
 ) -> Callable[[], None]:
     model_params = MODEL_SIZES[model_str]
     model = init_model(model_params, context_length=context_length)
-    # model.to(device="cuda")
+    model.to(device="cuda")
     x, y = get_random_data_batch(context_length)
-    # x, y = x.to("cuda"), y.to("cuda")
+    x, y = x.to("cuda"), y.to("cuda")
 
     if option == BenchmarkOption.FWD:
         stmt = lambda: forward_step(model, x, dtype)
