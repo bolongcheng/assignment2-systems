@@ -51,11 +51,18 @@ def experiment_remote() -> None:
         num_heads=num_heads,
         positional_encoder=RotaryEmbedding(dim=d_model // num_heads, context_length=context_length),
     )
-
     block = torch.compile(block, fullgraph=True)
+
+    def four_blocks(x):
+        x = block(x)
+        x = block(x)
+        x = block(x)
+        x = block(x)
+        return x
+
     x = torch.randn((4, context_length, d_model), requires_grad=True)
     with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook):
-        y = block(x)
+        y = four_blocks(x)
 
     print(f"Total size of saved tensors in single TransformerBlock: {total_size_bytes / (1024**2):.2f} MiB")
 
