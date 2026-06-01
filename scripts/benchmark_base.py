@@ -41,7 +41,7 @@ def get_random_data_batch(context_length: int = CONTEXT_LENGTH) -> tuple[torch.T
     return data[:, :-1].contiguous(), data[:, 1:].contiguous()
 
 
-@torch.no_grad()
+# @torch.no_grad()
 def forward_step(
     model: torch.nn.Module,
     x: torch.Tensor,
@@ -50,7 +50,7 @@ def forward_step(
     cm = torch.autocast(device_type="cuda", dtype=dtype) if dtype != torch.float32 else nullcontext()
     with cm:
         with nvtx.range("forward pass"):
-            model.forward(x)
+            _ = model.forward(x)
     torch.cuda.synchronize()
 
 
@@ -145,17 +145,16 @@ def profile(
     context_length: int = CONTEXT_LENGTH,
     dtype: torch.dtype = torch.float32,
 ) -> None:
-    cm = torch.autocast(device_type="cuda", dtype=dtype) if dtype != torch.float32 else nullcontext()
-    with cm:
-        stmt = create_stmt(model_str, option, context_length)
 
-        for _ in range(warmup_iters):
-            stmt()
-        torch.cuda.memory._record_memory_history(max_entries=1000000)
-        with nvtx.range("profile"):
-            stmt()
-        torch.cuda.memory._dump_snapshot(f"benchmarks/memory_snapshot_{model_str}_{option}_cl{context_length}_dtype{dtype}.pickle")
-        torch.cuda.memory._record_memory_history(enabled=None)
+    stmt = create_stmt(model_str, option, context_length, dtype)
+
+    for _ in range(warmup_iters):
+        stmt()
+    torch.cuda.memory._record_memory_history(max_entries=1000000)
+    with nvtx.range("profile"):
+        stmt()
+    torch.cuda.memory._dump_snapshot(f"benchmarks/memory_snapshot_{model_str}_{option}_cl{context_length}_dtype{dtype}.pickle")
+    torch.cuda.memory._record_memory_history(enabled=None)
 
 
 def _print_model_dtype(model: torch.nn.Module) -> None:
