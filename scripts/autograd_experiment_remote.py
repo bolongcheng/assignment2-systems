@@ -51,7 +51,7 @@ def experiment_remote() -> None:
         d_ff=d_ff,
         num_heads=num_heads,
         positional_encoder=RotaryEmbedding(dim=d_model // num_heads, context_length=context_length),
-    )
+    ).to("cuda")
     block = torch.compile(block, fullgraph=True)
 
     def four_blocks(x):
@@ -75,7 +75,7 @@ def experiment_remote() -> None:
         x = checkpoint(two_blocks, x, use_reentrant=False)
         return x
 
-    x = torch.randn((4, context_length, d_model), requires_grad=True)
+    x = torch.randn((4, context_length, d_model), device="cuda", requires_grad=True)
     with torch.autograd.graph.saved_tensors_hooks(pack_hook, unpack_hook):
         y = four_blocks_checkpoint(x)
 
