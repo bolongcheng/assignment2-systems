@@ -45,13 +45,15 @@ class SingleHeadAttention(nn.Module):
 
 
 def benchmark_sdp_attention(d_model: int, seq_len: int, warmup_iter: int, eval_iters: int):
+    torch._dynamo.reset()
     atten = SingleHeadAttention(
         d_model=d_model,
         seq_len=seq_len,
     ).to("cuda")
+    atten = torch.compile(atten)
     x = torch.randn((BATCH_SIZE, seq_len, d_model), device="cuda")
 
-    def stmt():
+    def fwd_stmt():
         atten(x)
         torch.cuda.synchronize()
 
@@ -87,7 +89,7 @@ def run_benchmark():
 
     df = pd.DataFrame.from_dict(results, orient="columns")
     df.index.names = ["iteration"]
-    df.to_csv("/root/benchmarks/sdp_attention_bwd_time.csv")
+    df.to_csv("/root/benchmarks/sdp_attention_compiled_bwd_time.csv")
 
 
 @app.local_entrypoint()
