@@ -1,10 +1,12 @@
 from itertools import product
-import torch
 import timeit
 import json
 
-from cs336_basics.model import scaled_dot_product_attention
 import modal
+import pandas as pd
+import torch
+
+from cs336_basics.model import scaled_dot_product_attention
 
 
 app = modal.App("cs336-benchmark")
@@ -23,10 +25,10 @@ BATCH_SIZE = 8
 WARMUP_ITERS = 5
 EVAL_ITERS = 100
 D_MODELS = [16, 32, 64, 128]
-SEQ_LENS = [256, 1024, 4096]  # , 8192, 16384]
+SEQ_LENS = [256, 1024, 4096, 8192]  # , 16384]
 
 
-def benchmark_sdp_attention_memory(d_model: int, seq_len: int, warmup_iter: int, eval_iters: int):
+def benchmark_sdp_attention(d_model: int, seq_len: int, warmup_iter: int, eval_iters: int):
     q = torch.randn((BATCH_SIZE, seq_len, d_model), device="cuda")
     k = torch.randn((BATCH_SIZE, seq_len, d_model), device="cuda")
     v = torch.randn((BATCH_SIZE, seq_len, d_model), device="cuda")
@@ -58,11 +60,12 @@ def benchmark_sdp_attention_memory(d_model: int, seq_len: int, warmup_iter: int,
 def run_benchmark():
     results = {}
     for d_model, seq_len in product(D_MODELS, SEQ_LENS):
-        result = benchmark_sdp_attention_memory(d_model, seq_len, WARMUP_ITERS, EVAL_ITERS)
+        result = benchmark_sdp_attention(d_model, seq_len, WARMUP_ITERS, EVAL_ITERS)
         results[f"{d_model}_{seq_len}"] = result
 
-    with open("/root/benchmarks/benchmark_sdp_attention_memory.json", "w") as f:
-        json.dump(results, f)
+    df = pd.DataFrame.from_dict(results, orient="columns")
+    df.index.names = ["iteration"]
+    df.to_csv("/root/benchmarks/sdp_attention_time.csv")
 
 
 @app.local_entrypoint()
