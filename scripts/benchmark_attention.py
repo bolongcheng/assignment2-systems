@@ -87,7 +87,7 @@ def run_benchmark():
 
     df = pd.DataFrame.from_dict(results, orient="columns")
     df.index.names = ["iteration"]
-    df.to_csv("/root/benchmarks/sdp_attention_time.csv")
+    df.to_csv("/root/benchmarks/sdp_attention_bwd_time.csv")
 
 
 @app.local_entrypoint()
