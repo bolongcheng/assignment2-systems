@@ -15,7 +15,7 @@ dependencies = [
     "tqdm>=4.67.1",
     "wandb>=0.19.7",
     "pandas>=2",
-    "triton",
+    "triton; sys_platform == 'linux'",
     "ty>=0.0.29",
     "ruff>=0.15.10",
 ]
