@@ -7,12 +7,13 @@ from enum import StrEnum
 import pandas as pd
 import torch
 import torch.cuda.nvtx as nvtx
-
 from cs336_basics.model import BasicsTransformerLM
 from cs336_basics.nn_utils import cross_entropy
 from cs336_basics.optimizer import AdamW
-from scripts.constants import MODEL_SIZES, BATCH_SIZE, ModelParams, VOCAB_SIZE, CONTEXT_LENGTH
+
+from scripts.constants import BATCH_SIZE, CONTEXT_LENGTH, MODEL_SIZES, VOCAB_SIZE, ModelParams
 from scripts.toy_model import ToyModel
+
 
 AMORTIZED_NUM = 1
 WARMUP_ITERS = 5

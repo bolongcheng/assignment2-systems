@@ -1,10 +1,8 @@
+import modal
 import torch
+from cs336_basics.model import RotaryEmbedding, TransformerBlock
 from torch import nn
 from torch.utils.checkpoint import checkpoint
-
-from cs336_basics.model import TransformerBlock, RotaryEmbedding
-
-import modal
 
 
 app = modal.App("cs336-benchmark")

@@ -1,11 +1,10 @@
-from itertools import product
 import timeit
+from itertools import product
 
 import modal
 import pandas as pd
 import torch
 import torch.nn as nn
-
 from cs336_basics.model import scaled_dot_product_attention
 
 
