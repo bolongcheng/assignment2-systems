@@ -5,6 +5,7 @@ import json
 import modal
 import pandas as pd
 import torch
+import torch.nn as nn
 
 from cs336_basics.model import scaled_dot_product_attention
 
@@ -28,14 +29,31 @@ D_MODELS = [16, 32, 64, 128]
 SEQ_LENS = [256, 1024, 4096, 8192]  # , 16384]
 
 
+class SingleHeadAttention(nn.Module):
+    def __init__(self, d_model: int, seq_len: int):
+        super().__init__()
+        self.wq = nn.Linear(d_model, d_model)
+        self.wk = nn.Linear(d_model, d_model)
+        self.wv = nn.Linear(d_model, d_model)
+        self.wo = nn.Linear(d_model, d_model)
+        self.mask = torch.triu(torch.ones(seq_len, seq_len, device="cuda", dtype=torch.bool))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        q = self.wq(x)
+        k = self.wk(x)
+        v = self.wv(x)
+        return self.wo(scaled_dot_product_attention(q, k, v, self.mask))
+
+
 def benchmark_sdp_attention(d_model: int, seq_len: int, warmup_iter: int, eval_iters: int):
-    q = torch.randn((BATCH_SIZE, seq_len, d_model), device="cuda")
-    k = torch.randn((BATCH_SIZE, seq_len, d_model), device="cuda")
-    v = torch.randn((BATCH_SIZE, seq_len, d_model), device="cuda")
-    mask = torch.triu(torch.ones(seq_len, seq_len, device="cuda", dtype=torch.bool))
+    atten = SingleHeadAttention(
+        d_model=d_model,
+        seq_len=seq_len,
+    ).to("cuda")
+    x = torch.randn((BATCH_SIZE, seq_len, d_model), device="cuda")
 
     def stmt():
-        scaled_dot_product_attention(q, k, v, mask)
+        atten(x)
         torch.cuda.synchronize()
 
     torch.cuda.reset_peak_memory_stats()
