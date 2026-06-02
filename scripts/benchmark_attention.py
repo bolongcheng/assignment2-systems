@@ -55,11 +55,16 @@ def benchmark_sdp_attention(d_model: int, seq_len: int, warmup_iter: int, eval_i
         atten(x)
         torch.cuda.synchronize()
 
+    def backward_stmt():
+        y = atten(x)
+        y.sum().backward()
+        torch.cuda.synchronize()
+
     torch.cuda.reset_peak_memory_stats()
     for _ in range(warmup_iter):
-        stmt()
+        backward_stmt()
 
-    times = timeit.repeat(stmt, repeat=eval_iters, number=1)
+    times = timeit.repeat(backward_stmt, repeat=eval_iters, number=1)
 
     # memory usage
     peak_memory = torch.cuda.max_memory_allocated() / (1024**2)  # in MB
