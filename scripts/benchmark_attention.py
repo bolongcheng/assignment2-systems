@@ -1,6 +1,5 @@
 from itertools import product
 import timeit
-import json
 
 import modal
 import pandas as pd
@@ -26,7 +25,7 @@ BATCH_SIZE = 8
 WARMUP_ITERS = 5
 EVAL_ITERS = 100
 D_MODELS = [16, 32, 64, 128]
-SEQ_LENS = [256, 1024, 4096, 8192]  # , 16384]
+SEQ_LENS = [256, 1024, 4096, 8192, 16384]
 
 
 class SingleHeadAttention(nn.Module):
