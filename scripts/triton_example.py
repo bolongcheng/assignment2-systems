@@ -82,7 +82,7 @@ def weighted_sum_fwd(
 
 class WeightedSumFunc(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, weight):
+    def forward(ctx: torch.autograd.function.FunctionCtx, x: torch.Tensor, weight: torch.Tensor):
         # Cache x and weight to be used in the backward pass, when we
         # only receive the gradient wrt. the output tensor, and
         # need to compute the gradients wrt. x and weight.
