@@ -27,16 +27,17 @@ class FlashAttention2Torch(torch.autograd.Function):
                 Q_tile = Q[b, i * Q_rows : (i + 1) * Q_rows, :]
                 O_tile = torch.zeros((Q_rows, d_head), device=Q.device, dtype=Q.dtype)
                 unnormed_softmax = torch.zeros((Q_rows,), device=Q.device, dtype=Q.dtype)
-                running_max = float("-inf")
+                running_max = torch.full((Q_rows,), float("-inf"), device=Q.device, dtype=torch.float32)
                 for j in range(KV_n_tiles):
                     K_tile = K[b, j * KV_rows : (j + 1) * KV_rows, :]
                     V_tile = V[b, j * KV_rows : (j + 1) * KV_rows, :]
                     S = Q_tile @ K_tile.T / math.sqrt(d_head)
                     old_running_max = running_max
-                    running_max = torch.max(torch.tensor(old_running_max), torch.max(S, dim=1)[0])[0]
-                    P = torch.exp(S - running_max)
-                    unnormed_softmax = torch.exp(torch.tensor(old_running_max - running_max)) * unnormed_softmax + torch.sum(P, dim=1)
-                    O_tile = torch.exp(torch.tensor(old_running_max - running_max)) * O_tile + P @ V_tile
+                    running_max = torch.maximum(old_running_max, torch.max(S, dim=1)[0])
+                    P = torch.exp(S - running_max[:, None])
+                    exp_mean_diff = torch.exp(old_running_max - running_max)
+                    unnormed_softmax = exp_mean_diff * unnormed_softmax + torch.sum(P, dim=1)
+                    O_tile = exp_mean_diff[:, None] * O_tile + P @ V_tile
 
                 O_tile = (1 / unnormed_softmax)[:, None] * O_tile
                 logsumexp_tile = running_max + torch.log(unnormed_softmax)
@@ -99,7 +100,7 @@ def flash_fwd_kernel(
         K_ptr + batch_index * stride_kb,
         shape=(N_KEYS, D),
         strides=(stride_kk, stride_kd),
-        offsets=(query_tile_index * K_TILE_SIZE, 0),
+        offsets=(0, 0),
         block_shape=(K_TILE_SIZE, D),
         order=(1, 0),
     )
@@ -107,14 +108,14 @@ def flash_fwd_kernel(
         V_ptr + batch_index * stride_vb,
         shape=(N_KEYS, D),
         strides=(stride_vk, stride_vd),
-        offsets=(query_tile_index * K_TILE_SIZE, 0),
+        offsets=(0, 0),
         block_shape=(K_TILE_SIZE, D),
         order=(1, 0),
     )
     Out_block_ptr = tl.make_block_ptr(
         O_ptr + batch_index * stride_ob,
         shape=(N_QUERIES, D),
-        strides=(stride_qq, stride_qd),
+        strides=(stride_oq, stride_od),
         offsets=(query_tile_index * Q_TILE_SIZE, 0),
         block_shape=(Q_TILE_SIZE, D),
         order=(1, 0),
@@ -128,24 +129,74 @@ def flash_fwd_kernel(
         order=(0,),
     )
 
-    for i in range(tl.cdiv(N_QUERIES, Q_TILE_SIZE)):
-        q_block = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")  # (Q_TILE_SIZE, D)
-        output_block = tl.zeros((Q_TILE_SIZE, D), dtype=tl.float32)
-        running_max = float("-inf")
-        running_unnormed_softmax = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
-        for j in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
-            K_block = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
-            V_block = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
-            S = tl.dot(q_block, K_block.T) * scale
-            old_running_max = running_max
-            running_max = tl.maximum(old_running_max, tl.max(S, axis=1))
-            P = tl.exp(S - running_max)
+    q_block = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
+    output_block = tl.zeros((Q_TILE_SIZE, D), dtype=tl.float32)
+    logsumexp_block = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
+    running_max = tl.full((Q_TILE_SIZE,), float("-inf"), dtype=tl.float32)
+    unnormed_softmax = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
+    for _ in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
+        K_block = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
+        V_block = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
+        S = tl.dot(q_block, K_block.T) * scale
+        old_running_max = running_max
+        running_max = tl.maximum(old_running_max, tl.max(S.to(running_max.dtype), axis=1))
+        P = tl.exp(S - running_max[:, None])
+        unnormed_softmax = tl.exp(old_running_max - running_max) * unnormed_softmax + tl.sum(P, axis=1)
+        output_block = tl.exp(old_running_max - running_max)[:, None] * output_block + tl.dot(P.to(V_block.dtype), V_block)
+
+        K_block_ptr = tl.advance(K_block_ptr, (K_TILE_SIZE, 0))
+        V_block_ptr = tl.advance(V_block_ptr, (K_TILE_SIZE, 0))
+
+    output_block = (1 / unnormed_softmax)[:, None] * output_block
+    logsumexp_block = running_max + tl.log(unnormed_softmax)
+
+    tl.store(Out_block_ptr, output_block.to(Out_block_ptr.type.element_ty), boundary_check=(0, 1))
+    tl.store(L_block_ptr, logsumexp_block.to(L_block_ptr.type.element_ty), boundary_check=(0,))
 
 
 class FlashAttentionTriton(torch.autograd.Function):
     @staticmethod
     def forward(ctx, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, is_causal: bool = False):
-        pass
+        B, N_QUERIES, head_dim = Q.shape
+        _, N_KEYS, _ = K.shape
+        assert Q.shape[0] == K.shape[0] == V.shape[0], "Batch dimensions must match"
+        assert Q.is_cuda and K.is_cuda and V.is_cuda
+        assert Q.is_contiguous() and K.is_contiguous() and V.is_contiguous()
+        logsumexp_output = torch.empty((B, N_QUERIES), dtype=torch.float32, device=Q.device)
+        output = torch.empty((B, N_QUERIES, head_dim), dtype=Q.dtype, device=Q.device)
+
+        ctx.Q_TILE_SIZE = 16
+        ctx.K_TILE_SIZE = 16
+
+        flash_fwd_kernel[(triton.cdiv(N_QUERIES, ctx.Q_TILE_SIZE), B)](
+            Q,
+            K,
+            V,
+            output,
+            logsumexp_output,
+            stride_qb=Q.stride(0),
+            stride_qq=Q.stride(1),
+            stride_qd=Q.stride(2),
+            stride_kb=K.stride(0),
+            stride_kk=K.stride(1),
+            stride_kd=K.stride(2),
+            stride_vb=V.stride(0),
+            stride_vk=V.stride(1),
+            stride_vd=V.stride(2),
+            stride_ob=output.stride(0),
+            stride_oq=output.stride(1),
+            stride_od=output.stride(2),
+            stride_lb=logsumexp_output.stride(0),
+            stride_lq=logsumexp_output.stride(1),
+            N_QUERIES=N_QUERIES,
+            N_KEYS=N_KEYS,
+            scale=1 / math.sqrt(head_dim),
+            D=head_dim,
+            Q_TILE_SIZE=ctx.Q_TILE_SIZE,
+            K_TILE_SIZE=ctx.K_TILE_SIZE,
+        )
+        ctx.save_for_backward(Q, K, V, output, logsumexp_output)
+        return output
 
     @staticmethod
     def backward(ctx, grad_output):
