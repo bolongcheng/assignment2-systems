@@ -6,9 +6,12 @@ import triton.language as tl
 
 
 @torch.compile
-def flashbackward(logsumexp_output, Q, K, V, output, grad_output):
+def flashbackward(logsumexp_output, Q, K, V, output, grad_output, is_causal: bool = False):
     B, S_Q, d_head = Q.shape
     S = torch.einsum("bqd,bkd->bqk", Q, K) / math.sqrt(d_head)
+    if is_causal:
+        mask = torch.triu(torch.ones(S_Q, S_Q, device=Q.device, dtype=torch.bool), diagonal=1)
+        S = S.masked_fill(mask, -1e6)
     P = torch.exp(S - logsumexp_output[:, :, None])
     dV = torch.einsum("bqk,bqd->bkd", P, grad_output)
     dP = torch.einsum("bqd,bkd->bqk", grad_output, V)
@@ -230,4 +233,6 @@ class FlashAttentionTriton(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        raise NotImplementedError("IMPLEMENT FLASH ATTENTION FIRST!?!?")
+        Q, K, V, output, logsumexp_output = ctx.saved_tensors
+        dQ, dK, dV = flashbackward(logsumexp_output, Q, K, V, output, grad_output, ctx.is_causal)
+        return dQ, dK, dV, None
