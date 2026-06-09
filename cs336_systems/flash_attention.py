@@ -81,6 +81,7 @@ def flash_fwd_kernel(
     D: tl.constexpr,
     Q_TILE_SIZE: tl.constexpr,
     K_TILE_SIZE: tl.constexpr,
+    is_causal: tl.constexpr,
 ):
     # Program indices
     query_tile_index = tl.program_id(0)
@@ -134,10 +135,21 @@ def flash_fwd_kernel(
     logsumexp_block = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
     running_max = tl.full((Q_TILE_SIZE,), float("-inf"), dtype=tl.float32)
     unnormed_softmax = tl.zeros((Q_TILE_SIZE,), dtype=tl.float32)
-    for _ in range(tl.cdiv(N_KEYS, K_TILE_SIZE)):
+
+    high = tl.cdiv(N_KEYS, K_TILE_SIZE)
+    q_positions = tl.arange(0, Q_TILE_SIZE) + query_tile_index * Q_TILE_SIZE
+    if is_causal:
+        q_end = (query_tile_index + 1) * Q_TILE_SIZE
+        high = tl.cdiv(q_end, K_TILE_SIZE)
+
+    for j in tl.range(0, high, 1):
         K_block = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
         V_block = tl.load(V_block_ptr, boundary_check=(0, 1), padding_option="zero")
         S = tl.dot(q_block, K_block.T) * scale
+        if is_causal:
+            k_positions = tl.arange(0, K_TILE_SIZE) + j * K_TILE_SIZE
+            causal_mask = q_positions[:, None] >= k_positions[None, :]
+            S = S + tl.where(causal_mask, 0.0, -1e6)
         old_running_max = running_max
         running_max = tl.maximum(old_running_max, tl.max(S.to(running_max.dtype), axis=1))
         P = tl.exp(S - running_max[:, None])
@@ -167,6 +179,7 @@ class FlashAttentionTriton(torch.autograd.Function):
 
         ctx.Q_TILE_SIZE = 16
         ctx.K_TILE_SIZE = 16
+        ctx.is_causal = is_causal
 
         flash_fwd_kernel[(triton.cdiv(N_QUERIES, ctx.Q_TILE_SIZE), B)](
             Q,
@@ -194,6 +207,7 @@ class FlashAttentionTriton(torch.autograd.Function):
             D=head_dim,
             Q_TILE_SIZE=ctx.Q_TILE_SIZE,
             K_TILE_SIZE=ctx.K_TILE_SIZE,
+            is_causal=is_causal,
         )
         ctx.save_for_backward(Q, K, V, output, logsumexp_output)
         return output
