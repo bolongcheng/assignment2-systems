@@ -5,6 +5,20 @@ import triton
 import triton.language as tl
 
 
+@torch.compile
+def flashbackward(logsumexp_output, Q, K, V, output, grad_output):
+    B, S_Q, d_head = Q.shape
+    S = torch.einsum("bqd,bkd->bqk", Q, K) / math.sqrt(d_head)
+    P = torch.exp(S - logsumexp_output[:, :, None])
+    dV = torch.einsum("bqk,bqd->bkd", P, grad_output)
+    dP = torch.einsum("bqd,bkd->bqk", grad_output, V)
+    D = torch.sum(output * grad_output, dim=2)  # sum over d_head
+    dS = P * (dP - D[:, :, None])
+    dQ = torch.einsum("bqk,bkd->bqd", dS, K) / math.sqrt(d_head)
+    dK = torch.einsum("bqk,bqd->bkd", dS, Q) / math.sqrt(d_head)
+    return dQ, dK, dV
+
+
 class FlashAttention2Torch(torch.autograd.Function):
     @staticmethod
     def forward(ctx, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, is_causal: bool = False):
@@ -51,7 +65,9 @@ class FlashAttention2Torch(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        raise NotImplementedError("IMPLEMENT FLASH ATTENTION FIRST!?!?")
+        logsumexp_output, Q, K, V, output = ctx.saved_tensors
+        dQ, dK, dV = flashbackward(logsumexp_output, Q, K, V, output, grad_output)
+        return dQ, dK, dV, None
 
 
 @triton.jit
