@@ -5,14 +5,14 @@ import triton
 import triton.language as tl
 
 
-@torch.compile
+@torch.compile()
 def flashbackward(logsumexp_output, Q, K, V, output, grad_output, is_causal: bool = False):
     B, S_Q, d_head = Q.shape
     S = torch.einsum("bqd,bkd->bqk", Q, K) / math.sqrt(d_head)
     if is_causal:
         mask = torch.triu(torch.ones(S_Q, S_Q, device=Q.device, dtype=torch.bool), diagonal=1)
-        S = S.masked_fill(mask, -1e6)
-    P = torch.exp(S - logsumexp_output[:, :, None])
+        S = S.to(torch.float32).masked_fill(mask, -1e6)
+    P = torch.exp(S - logsumexp_output[:, :, None]).to(Q.dtype)
     dV = torch.einsum("bqk,bqd->bkd", P, grad_output)
     dP = torch.einsum("bqd,bkd->bqk", grad_output, V)
     D = torch.sum(output * grad_output, dim=2)  # sum over d_head
@@ -196,8 +196,8 @@ class FlashAttentionTriton(torch.autograd.Function):
         logsumexp_output = torch.empty((B, N_QUERIES), dtype=torch.float32, device=Q.device)
         output = torch.empty((B, N_QUERIES, head_dim), dtype=Q.dtype, device=Q.device)
 
-        ctx.Q_TILE_SIZE = 16
-        ctx.K_TILE_SIZE = 16
+        ctx.Q_TILE_SIZE = 64
+        ctx.K_TILE_SIZE = 64
         ctx.is_causal = is_causal
 
         flash_fwd_kernel[(triton.cdiv(N_QUERIES, ctx.Q_TILE_SIZE), B)](
