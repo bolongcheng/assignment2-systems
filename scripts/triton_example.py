@@ -19,6 +19,64 @@ def weighted_sum_fwd(
     ROWS_TILE_SIZE: tl.constexpr,
     D_TILE_SIZE: tl.constexpr,  # Tile shapes must be known at compile time
 ):
+    """
+    Tiled Weighted Sum Along the Feature Dimension (Forward Pass)
+
+    Computes:
+        output[r] = sum_{d=0..D-1} x[r, d] * weight[d]
+        Shape: (NUM_ROWS,)
+
+    Parallelization Strategy:
+        - Grid: 1D grid of size cdiv(NUM_ROWS, ROWS_TILE_SIZE).
+        - Each program (thread block) is assigned a tile of ROWS_TILE_SIZE rows.
+        - Inside each program, the feature dimension D is processed sequentially
+          in blocks of D_TILE_SIZE.
+        - Accumulation is done in register-resident float32 to preserve precision.
+
+    Tiling Diagram:
+
+                            D  (feature dim, iterated INSIDE each program)
+                    ┌──────────────────────────────────────────────────────────┐
+                    │  D_TILE_SIZE   D_TILE_SIZE   D_TILE_SIZE         (pad 0) │
+                    │ ┌───────────┬───────────┬───────────┬─── ... ─┬────────┐ │
+                    │ │   tile    │   tile    │   tile    │         │ tile 0-│ │
+       ROWS_        │ │  (R x Dt) │  (R x Dt) │  (R x Dt) │         │ padded │ │
+       TILE_        │ │           │           │           │         │        │ │
+       SIZE   ──►   │ │   step 0  │   step 1  │   step 2  │   ...   │ step k │ │  program_id(0) = 0
+            (=R)    │ └───────────┴───────────┴───────────┴─── ... ─┴────────┘ │
+                    │                                                          │
+                    │ ┌───────────┬───────────┬───────────┬─── ... ─┬────────┐ │
+       ROWS_        │ │           │           │           │         │        │ │
+       TILE_  ──►   │ │   step 0  │   step 1  │   step 2  │   ...   │ step k │ │  program_id(0) = 1
+       SIZE         │ └───────────┴───────────┴───────────┴─── ... ─┴────────┘ │
+                    │                                                          │
+                    │                          ...                             │
+                    │                                                          │
+                    │ ┌───────────┬───────────┬───────────┬─── ... ─┬────────┐ │
+       (last        │ │   step 0  │   step 1  │   step 2  │   ...   │ step k │ │  program_id(0) = G-1
+        tile may    │ └───────────┴───────────┴───────────┴─── ... ─┴────────┘ │
+        be padded   └──────────────────────────────────────────────────────────┘
+        in rows)        ▲                                                  ▲
+                        │       weight tile slides left → right             │
+                        │ ┌───────────┬───────────┬───────────┬── ... ─┬─────┐
+            weight:     │ │  Dt slice │  Dt slice │  Dt slice │        │ pad │   shape (D,), shared by all rows
+                        │ └───────────┴───────────┴───────────┴── ... ─┴─────┘
+                        │     step 0      step 1      step 2          step k
+                        │
+                        │   For each row tile r:
+                        │     acc(R,) = 0
+                        │     for step in 0..k:
+                        │        acc += sum( x_tile(R, Dt) * weight_tile(Dt)[None,:], axis=1 )
+                        │     output[r*R : (r+1)*R] = acc
+                        ▼
+       output (NUM_ROWS,):  one scalar per row, written once at the end.
+
+    Legend:
+      R  = ROWS_TILE_SIZE      (rows handled by ONE program / thread block)
+      Dt = D_TILE_SIZE         (chunk of feature dim handled per inner-loop step)
+      G  = cdiv(NUM_ROWS, R)   (grid size, = number of programs launched)
+      k+1 = cdiv(D, Dt)        (number of inner-loop steps)
+    """
     # Each instance will compute the weighted sum of a tile of rows of x.
     # `tl.program_id` gives us a way to check which thread block we're running in
     row_tile_idx = tl.program_id(0)
@@ -101,6 +159,67 @@ def weighted_sum_backward(
     ROWS_TILE_SIZE: tl.constexpr,
     D_TILE_SIZE: tl.constexpr,
 ):
+    """
+    Tiled Weighted Sum (Backward Pass)
+
+    Computes:
+        1) grad_x[r, d] = grad_output[r] * weight[d]
+        - Pointwise / Outer-product pattern.
+        - Shape: (NUM_ROWS, D)
+
+        2) grad_weight[d] = sum_{r=0..NUM_ROWS-1} grad_output[r] * x[r, d]
+        - Reduction across rows.
+        - Shape: (D,)
+
+    Reduction Strategy (Split-K / Two-Stage Reduction):
+        - Row-parallelization is maintained to match the forward pass layout.
+        - Since multiple programs need to accumulate into the same grad_weight[d],
+        writing directly with atomics is avoided to prevent memory contention.
+        - Instead, each program row-tile writes its local partial sum into a
+        temporary 2D buffer `partial_grad_weight` of shape (n_row_tiles, D).
+        - A quick PyTorch sum `partial_grad_weight.sum(axis=0)` is run on the GPU
+        outside Triton to obtain the final grad_weight.
+
+    Tiling Diagram:
+
+                                    D  (inner loop walks left → right in Dt chunks)
+                        ┌─────────────────────────────────────────────────────────────┐
+                        │   Dt          Dt          Dt              (last tile pads) │
+                        │ ┌────────┬────────┬────────┬─── ... ───┬────────┐           │
+    Row-tile 0  ──►     │ │  step0 │  step1 │  step2 │           │  stepK │           │  program_id(0)=0
+    (R rows of x)       │ └────────┴────────┴────────┴─── ... ───┴────────┘           │
+                        │                                                              │
+    Row-tile 1  ──►     │ ┌────────┬────────┬────────┬─── ... ───┬────────┐           │  program_id(0)=1
+    (R rows of x)       │ └────────┴────────┴────────┴─── ... ───┴────────┘           │
+                        │                       ...                                    │
+    Row-tile G-1 ──►    │ ┌────────┬────────┬────────┬─── ... ───┬────────┐           │  program_id(0)=G-1
+    (R rows of x)       │ └────────┴────────┴────────┴─── ... ───┴────────┘           │
+                        └─────────────────────────────────────────────────────────────┘
+
+    Inputs each step:
+        x            tile  shape (R, Dt)        <- loaded
+        weight       tile  shape (Dt,)          <- loaded
+        grad_output  slice shape (R,)           <- loaded once (ptr never advanced)
+
+    Outputs each step:
+        grad_x       tile  shape (R, Dt)        <- stored to grad_x[row_tile, d_tile]
+                            via  g[:,None] * w[None,:]
+                            (each element written exactly once)
+
+        partial_gw   tile  shape (1, Dt)        <- stored to partial_grad_weight[row_tile_idx, d_tile]
+                            via  sum_r ( x_tile * g[:,None] )      <-- reduction over R only
+
+    After kernel completes:
+    partial_grad_weight  shape (G, D)
+                    │
+                    ▼  PyTorch:  grad_weight = partial_grad_weight.sum(axis=0)
+                grad_weight  shape (D,)
+
+    Legend:
+    R  = ROWS_TILE_SIZE      (rows handled by ONE program / thread block)
+    Dt = D_TILE_SIZE         (chunk of feature dim handled per inner-loop step)
+    G  = cdiv(NUM_ROWS, R)   (grid size, = number of programs launched / row tiles)
+    """
     row_tile_idx = tl.program_id(0)
     n_row_tiles = tl.num_programs(0)
 
