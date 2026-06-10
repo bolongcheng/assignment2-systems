@@ -7,7 +7,7 @@ from cs336_systems.flash_attention import FlashAttentionTriton
 
 
 HEAD_DIMS = [16, 32, 64, 128]
-CONTEXT_LENGTHS = [128, 256, 512]  # , 1024, 2048, 4096, 8192, 16384, 32768, 65536]
+CONTEXT_LENGTHS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
 BATCH_SIZE = 1
 
 
