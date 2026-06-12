@@ -76,4 +76,9 @@ def bench_flash_attention(CONTEXT_LENGTH, HEAD_DIM, dtype, mode, provider):
     return ms
 
 
-bench_flash_attention.run(show_plots=True, print_data=True, save_path="benchmarks")
+def main(save_path: str = "benchmarks") -> None:
+    bench_flash_attention.run(show_plots=True, print_data=True, save_path=save_path)
+
+
+if __name__ == "__main__":
+    main()
