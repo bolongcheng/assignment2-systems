@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 
 
-@torch.compile()
+@torch.compile(dynamic=True)
 def flashbackward(logsumexp_output, Q, K, V, output, grad_output, is_causal: bool = False):
     B, S_Q, d_head = Q.shape
     S = torch.einsum("bqd,bkd->bqk", Q, K) / math.sqrt(d_head)
@@ -196,7 +196,7 @@ class FlashAttentionTriton(torch.autograd.Function):
         logsumexp_output = torch.empty((B, N_QUERIES), dtype=torch.float32, device=Q.device)
         output = torch.empty((B, N_QUERIES, head_dim), dtype=Q.dtype, device=Q.device)
 
-        ctx.Q_TILE_SIZE = 64
+        ctx.Q_TILE_SIZE = 64 if N_QUERIES < 1024 else 128
         ctx.K_TILE_SIZE = 64
         ctx.is_causal = is_causal
 
