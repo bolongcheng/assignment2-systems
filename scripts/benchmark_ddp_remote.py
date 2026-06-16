@@ -7,7 +7,7 @@ app = modal.App("cs336-benchmark-ddp")
 
 
 @app.function(
-    gpu="B100:2",
+    gpu="B200:2",
     image=BENCHMARK_IMAGE,
     volumes={"/root/benchmarks": BENCHMARK_VOLUME},
     timeout=3600,
