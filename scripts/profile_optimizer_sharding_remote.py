@@ -1,0 +1,29 @@
+import modal
+
+from scripts.modal_utils import BENCHMARK_IMAGE, BENCHMARK_VOLUME
+
+
+app = modal.App("cs336-profile-sharded-optimizer")
+
+
+@app.function(
+    gpu="B200:2",
+    image=BENCHMARK_IMAGE,
+    volumes={"/root/benchmarks": BENCHMARK_VOLUME},
+    timeout=3600,
+)
+def benchmark_ddp_remote() -> None:
+    import sys
+
+    sys.path.append("/root")
+    import torch.multiprocessing as mp
+
+    from scripts.profile_optimizer_sharding import WORLD_SIZE, profile_worker
+
+    mp.spawn(profile_worker, args=(WORLD_SIZE, False), nprocs=WORLD_SIZE, join=True)
+    BENCHMARK_VOLUME.commit()
+
+
+@app.local_entrypoint()
+def main() -> None:
+    benchmark_ddp_remote.remote()
