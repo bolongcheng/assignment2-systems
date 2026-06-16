@@ -1,5 +1,4 @@
 import argparse
-import os
 import time
 from typing import Any
 
@@ -7,6 +6,8 @@ import pandas as pd
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+
+from scripts.distributed_utils import setup
 
 
 NUM_FLOAT_ELEMENTS = {
@@ -19,16 +20,6 @@ NUM_FLOAT_ELEMENTS = {
 NUM_GPUS = [2, 4, 6]
 WARMUP_ITERATIONS = 5
 BENCHMARK_ITERATIONS = 50
-
-
-def setup(rank: int, world_size: int, debug: bool = True) -> None:
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29500"
-
-    if debug:
-        dist.init_process_group("gloo", rank=rank, world_size=world_size)
-    else:
-        dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
 
 def run_distributed_timing_benchmark(
