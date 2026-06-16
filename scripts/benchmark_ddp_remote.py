@@ -1,25 +1,15 @@
 import modal
 
+from scripts.modal_utils import BENCHMARK_IMAGE, BENCHMARK_VOLUME
+
 
 app = modal.App("cs336-benchmark-ddp")
 
-image = (
-    modal.Image.from_registry("nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04", add_python="3.12")
-    .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
-    .pip_install("uv")
-    .add_local_dir("cs336-basics", remote_path="/.uv/cs336-basics", copy=True)
-    .uv_sync()
-    .add_local_python_source("cs336_basics", "cs336_systems")
-    .add_local_dir("scripts", remote_path="/root/scripts")
-)
-
-bchmk_vol = modal.Volume.from_name("cs336_benchmark", create_if_missing=True)
-
 
 @app.function(
-    gpu="A100:2",
-    image=image,
-    volumes={"/root/benchmarks": bchmk_vol},
+    gpu="B100:2",
+    image=BENCHMARK_IMAGE,
+    volumes={"/root/benchmarks": BENCHMARK_VOLUME},
     timeout=3600,
 )
 def benchmark_ddp_remote() -> None:
@@ -31,7 +21,7 @@ def benchmark_ddp_remote() -> None:
     from scripts.benchmark_ddp import WORLD_SIZE, worker
 
     mp.spawn(worker, args=(WORLD_SIZE,), nprocs=WORLD_SIZE, join=True)
-    bchmk_vol.commit()
+    BENCHMARK_VOLUME.commit()
 
 
 @app.local_entrypoint()
