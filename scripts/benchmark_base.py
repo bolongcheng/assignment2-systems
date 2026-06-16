@@ -37,8 +37,8 @@ def init_model(model_params: ModelParams, context_length: int) -> BasicsTransfor
     )
 
 
-def get_random_data_batch(context_length: int = CONTEXT_LENGTH) -> tuple[torch.Tensor, torch.Tensor]:
-    data = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE, context_length + 1))
+def get_random_data_batch(context_length: int = CONTEXT_LENGTH, batch_size: int = BATCH_SIZE) -> tuple[torch.Tensor, torch.Tensor]:
+    data = torch.randint(0, VOCAB_SIZE, (batch_size, context_length + 1))
     return data[:, :-1].contiguous(), data[:, 1:].contiguous()
 
 

@@ -3,25 +3,27 @@ import modal
 from scripts.modal_utils import BENCHMARK_IMAGE, BENCHMARK_VOLUME
 
 
-app = modal.App("cs336-benchmark-triton")
+app = modal.App("cs336-benchmark-ddp")
 
 
 @app.function(
-    gpu="B200",
+    gpu="B200:2",
     image=BENCHMARK_IMAGE,
     volumes={"/root/benchmarks": BENCHMARK_VOLUME},
     timeout=3600,
 )
-def benchmark_triton_remote() -> None:
+def benchmark_ddp_remote() -> None:
     import sys
 
     sys.path.append("/root")
-    from scripts.benchmark_triton import main
+    import torch.multiprocessing as mp
 
-    main(save_path="/root/benchmarks/triton")
+    from scripts.benchmark_ddp import WORLD_SIZE, worker
+
+    mp.spawn(worker, args=(WORLD_SIZE, False), nprocs=WORLD_SIZE, join=True)
     BENCHMARK_VOLUME.commit()
 
 
 @app.local_entrypoint()
 def main() -> None:
-    benchmark_triton_remote.remote()
+    benchmark_ddp_remote.remote()
