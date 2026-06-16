@@ -9,8 +9,9 @@ class DDP(nn.Module):
         self.module = module
         self._comm_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
 
-        for param in self.module.parameters():
-            dist.broadcast(param, src=0)
+        with torch.no_grad():
+            for param in self.module.parameters():
+                dist.broadcast(param, src=0)
 
         for param in self.module.parameters():
             if param.requires_grad:
