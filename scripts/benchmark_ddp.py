@@ -1,10 +1,12 @@
+from enum import StrEnum
+
 import pandas as pd
 import torch
 import torch.distributed as dist
 from cs336_basics.nn_utils import cross_entropy
 from cs336_basics.optimizer import AdamW
 
-from cs336_systems.naive_ddp import DDP
+from cs336_systems.ddp import DDPFlatten, DDPNaive
 from scripts.benchmark_base import EVAL_ITERS, WARMUP_ITERS, get_random_data_batch, init_model
 from scripts.constants import BATCH_SIZE, CONTEXT_LENGTH, MODEL_SIZES
 from scripts.distributed_utils import setup
@@ -13,8 +15,13 @@ from scripts.distributed_utils import setup
 WORLD_SIZE = 2
 
 
+class DDPImpl(StrEnum):
+    NAIVE = "naive"
+    FLATTEN = "flatten"
+
+
 def ddp_forward_backward_optimize_step(
-    model: DDP,
+    model: DDPNaive | DDPFlatten,
     optimizer: torch.optim.Optimizer,
     x: torch.Tensor,
     y: torch.Tensor,
@@ -25,7 +32,11 @@ def ddp_forward_backward_optimize_step(
     pred = model.forward(x)
     loss = cross_entropy(pred.view(-1, pred.shape[-1]), y.view(-1))
     optimizer.zero_grad(set_to_none=True)
+
     loss.backward()
+    if isinstance(model, DDPFlatten):
+        model.allreduce_grads()
+
     optimizer.step()
 
     torch.cuda.synchronize()
@@ -34,12 +45,19 @@ def ddp_forward_backward_optimize_step(
     return comm_ms
 
 
-def benchmark_ddp():
+def benchmark_ddp(ddp_impl: DDPImpl):
     device = torch.device(f"cuda:{dist.get_rank()}")
 
     base_module = init_model(MODEL_SIZES["xl"], CONTEXT_LENGTH)
     base_module.to(device)
-    ddp_model = DDP(base_module)
+
+    if ddp_impl == "naive":
+        ddp_model = DDPNaive(base_module)
+    elif ddp_impl == "flatten":
+        ddp_model = DDPFlatten(base_module)
+    else:
+        raise ValueError(f"Unknown DDP implementation: {ddp_impl}")
+
     optimizer = AdamW(ddp_model.parameters())
     x, y = get_random_data_batch(CONTEXT_LENGTH, BATCH_SIZE // WORLD_SIZE)
     x, y = x.to(device), y.to(device)
@@ -74,7 +92,8 @@ def benchmark_ddp():
 def worker(rank: int, world_size: int, debug: bool = True) -> None:
     setup(rank, world_size, debug)
 
-    results = benchmark_ddp()
+    ddp_impl = DDPImpl.FLATTEN
+    results = benchmark_ddp(ddp_impl=ddp_impl)
 
     if rank == 0:
         df = pd.DataFrame(
@@ -84,7 +103,7 @@ def worker(rank: int, world_size: int, debug: bool = True) -> None:
             }
         )
         df.index.name = "iteration"
-        f_name = f"benchmarks/ddp_benchmark_xl_naive_ws={world_size}_bs={BATCH_SIZE}_cl={CONTEXT_LENGTH}.csv"
+        f_name = f"benchmarks/ddp_benchmark_xl_{ddp_impl}_ws={world_size}_bs={BATCH_SIZE}_cl={CONTEXT_LENGTH}.csv"
         df.to_csv(f_name)
         print(f"Results saved to {f_name}")
 
