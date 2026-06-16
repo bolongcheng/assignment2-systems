@@ -18,7 +18,8 @@ class CommEventsTimingMixin:
 
 class DDPNaive(nn.Module, CommEventsTimingMixin):
     def __init__(self, module: nn.Module) -> None:
-        super().__init__()
+        nn.Module.__init__(self)
+        CommEventsTimingMixin.__init__(self)
         self.module = module
 
         with torch.no_grad():
@@ -47,7 +48,8 @@ class DDPNaive(nn.Module, CommEventsTimingMixin):
 
 class DDPFlatten(nn.Module, CommEventsTimingMixin):
     def __init__(self, module: nn.Module) -> None:
-        super().__init__()
+        nn.Module.__init__(self)
+        CommEventsTimingMixin.__init__(self)
         self.module = module
 
         with torch.no_grad():
