@@ -20,7 +20,7 @@ def benchmark_ddp_remote() -> None:
 
     from scripts.benchmark_ddp import WORLD_SIZE, worker
 
-    mp.spawn(worker, args=(WORLD_SIZE,), nprocs=WORLD_SIZE, join=True)
+    mp.spawn(worker, args=(WORLD_SIZE, False), nprocs=WORLD_SIZE, join=True)
     BENCHMARK_VOLUME.commit()
 
 
