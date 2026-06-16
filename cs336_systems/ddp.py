@@ -28,17 +28,16 @@ class DDPNaive(nn.Module, CommEventsTimingMixin):
 
         for param in self.module.parameters():
             if param.requires_grad:
-                param.register_hook(self.make_allreduce_hook())
+                param.register_post_accumulate_grad_hook(self.make_allreduce_hook())
 
     def make_allreduce_hook(self):
         def hook(grad):
             start_event = torch.cuda.Event(enable_timing=True)
             end_event = torch.cuda.Event(enable_timing=True)
             start_event.record()
-            dist.all_reduce(grad, op=dist.ReduceOp.SUM)
+            dist.all_reduce(grad, op=dist.ReduceOp.AVG)
             end_event.record()
             self._comm_events.append((start_event, end_event))
-            return grad / dist.get_world_size()
 
         return hook
 
