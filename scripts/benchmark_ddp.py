@@ -51,6 +51,7 @@ def ddp_forward_backward_optimize_step(
 
 def benchmark_ddp(ddp_impl: DDPImpl):
     device = torch.device(f"cuda:{dist.get_rank()}")
+    torch.cuda.set_device(device)
 
     base_module = init_model(MODEL_SIZES["xl"], CONTEXT_LENGTH)
     base_module.to(device)
