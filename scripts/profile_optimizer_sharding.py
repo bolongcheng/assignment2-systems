@@ -88,3 +88,62 @@ def profile_worker(rank: int, world_size: int) -> None:
 
     profile_ddp_with_optimizer_sharding(sharded=True)
     dist.destroy_process_group()
+
+
+def benchmark_optimizer_sharding(sharded: bool = True):
+    device = torch.device(f"cuda:{dist.get_rank()}")
+    torch.cuda.set_device(device)
+
+    base_module = init_model(MODEL_SIZES["xl"], CONTEXT_LENGTH)
+    base_module.to(device)
+
+    ddp_model = DDPOverlap(base_module)
+
+    optimizer = ShardedOptimizer(ddp_model.parameters(), AdamW)
+    x, y = get_random_data_batch(CONTEXT_LENGTH, BATCH_SIZE // WORLD_SIZE)
+    x, y = x.to(device), y.to(device)
+
+    def stmt():
+        return ddp_forward_backward_optimize_step(ddp_model, optimizer, x, y)
+
+    for _ in range(WARMUP_ITERS):
+        stmt()
+
+    total_times_ms = []
+    comm_times_ms = []
+
+    for _ in range(EVAL_ITERS):
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        start_event.record()
+        comm_ms = stmt()
+        end_event.record()
+
+        torch.cuda.synchronize()
+        total_times_ms.append(start_event.elapsed_time(end_event))
+        comm_times_ms.append(comm_ms)
+
+    return {
+        "total_ms": total_times_ms,
+        "comm_ms": comm_times_ms,
+    }
+
+
+def benchmark_worker(rank: int, world_size: int) -> None:
+    setup(rank, world_size, False)
+
+    results = benchmark_optimizer_sharding(sharded=True)
+    if rank == 0:
+        df = pd.DataFrame(
+            {
+                "total_ms": results["total_ms"],
+                "comm_ms": results["comm_ms"],
+            }
+        )
+        df.index.name = "iteration"
+        f_name = f"benchmarks/ddp_benchmark_xl_overlap_sharded_ws={WORLD_SIZE}_bs={BATCH_SIZE}_cl={CONTEXT_LENGTH}.csv"
+        df.to_csv(f_name)
+        print(f"Results saved to {f_name}")
+
+    dist.destroy_process_group()

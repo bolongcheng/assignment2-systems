@@ -18,9 +18,9 @@ def benchmark_ddp_remote() -> None:
     sys.path.append("/root")
     import torch.multiprocessing as mp
 
-    from scripts.profile_optimizer_sharding import WORLD_SIZE, profile_worker
+    from scripts.profile_optimizer_sharding import WORLD_SIZE, benchmark_worker
 
-    mp.spawn(profile_worker, args=(WORLD_SIZE,), nprocs=WORLD_SIZE, join=True)
+    mp.spawn(benchmark_worker, args=(WORLD_SIZE,), nprocs=WORLD_SIZE, join=True)
     BENCHMARK_VOLUME.commit()
 
 
