@@ -51,13 +51,14 @@ def print_memory_stats(tag):
 
 def profile_ddp_with_optimizer_sharding(sharded: bool = False):
     device = torch.device(f"cuda:{dist.get_rank()}")
+    torch.cuda.set_device(device)
 
-    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.reset_peak_memory_stats(device)
     base_module = init_model(MODEL_SIZES["xl"], CONTEXT_LENGTH)
     base_module.to(device)
     ddp_model = DDPOverlap(base_module)
     print_memory_stats("after_model_init")
-    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.reset_peak_memory_stats(device)
 
     if sharded:
         optimizer = ShardedOptimizer(ddp_model.parameters(), AdamW)
@@ -74,15 +75,16 @@ def profile_ddp_with_optimizer_sharding(sharded: bool = False):
     ddp_model.finish_gradient_synchronization()
 
     print_memory_stats("before_optimizer_step")
-    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.reset_peak_memory_stats(device)
 
     optimizer.step()
 
     print_memory_stats("after_optimizer_step")
-    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.reset_peak_memory_stats(device)
 
 
 def profile_worker(rank: int, world_size: int) -> None:
     setup(rank, world_size, False)
 
     profile_ddp_with_optimizer_sharding(sharded=True)
+    dist.destroy_process_group()

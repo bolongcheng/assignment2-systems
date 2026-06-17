@@ -20,7 +20,7 @@ def benchmark_ddp_remote() -> None:
 
     from scripts.profile_optimizer_sharding import WORLD_SIZE, profile_worker
 
-    mp.spawn(profile_worker, args=(WORLD_SIZE, False), nprocs=WORLD_SIZE, join=True)
+    mp.spawn(profile_worker, args=(WORLD_SIZE,), nprocs=WORLD_SIZE, join=True)
     BENCHMARK_VOLUME.commit()
 
 
